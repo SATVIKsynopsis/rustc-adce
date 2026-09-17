@@ -176,32 +176,3 @@ impl<'tcx> MirPass<'tcx> for AdcePass {
         SimplifyCfg::Final.run_pass(tcx, body);
     }
 }
-
-// struct DeadStatementCollector<'a> {
-//     always_live: &'a DenseBitSet<Local>,
-//     debuginfo: &'a DenseBitSet<Local>,
-//     dead_locations: Vec<Location>,
-// }
-
-// impl<'a, 'tcx> ResultsVisitor<'tcx, MaybeTransitiveLiveLocals<'_>> for DeadStatementCollector<'a> {
-//     fn visit_after_primary_statement_effect(
-//         &mut self,
-//         state: &DenseBitSet<Local>,
-//         statement: &Statement<'tcx>,
-//         location: Location,
-//     ) {
-//         let StatementKind::Assign(assign) = &statement.kind else { return };
-//         let (place, rvalue) = &**assign;
-//         let Some(local) = place.as_local() else { return };
-
-//         if self.always_live.contains(local) || self.debuginfo.contains(local) {
-//             return;
-//         }
-//         if !matches!(rvalue, Rvalue::Use(..)) {
-//             return;
-//         }
-//         if !state.contains(local) {
-//             self.dead_locations.push(location);
-//         }
-//     }
-// }
