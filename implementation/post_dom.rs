@@ -12,21 +12,21 @@ pub(crate) struct PostDomGraph<'a, 'tcx> {
 impl<'a, 'tcx> PostDomGraph<'a, 'tcx> {
     pub(crate) fn new(body: &'a Body<'tcx>) -> Self {
         let real_exits = body
-            .basic_blocks
-            .iter_enumerated()
-            .filter_map(|(bb, data)| {
-                // A "real exit" is any block with no successors at all — this
-                // naturally covers Return, Unreachable, UnwindResume, AND any
-                // diverging call/drop/assert whose terminator has no target
-                // and an unwind action that doesn't point at another block
-                // (UnwindAction::Continue or ::Terminate).
-                if data.terminator().successors().next().is_none() {
-                    Some(bb)
-                } else {
-                    None
-                }
-            })
-            .collect();
+    .basic_blocks
+    .iter_enumerated()
+    .filter_map(|(bb, data)| {
+        // A "real exit" is any block with no successors at all — this
+        // naturally covers Return, Unreachable, UnwindResume, AND any
+        // diverging call/drop/assert whose terminator has no target
+        // and an unwind action that doesn't point at another block
+        // (UnwindAction::Continue or ::Terminate).
+        if data.terminator().successors().next().is_none() {
+            Some(bb)
+        } else {
+            None
+        }
+    })
+    .collect();
 
         let virtual_exit = BasicBlock::from_usize(body.basic_blocks.len());
 

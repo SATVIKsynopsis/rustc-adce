@@ -9,7 +9,7 @@ use rustc_data_structures::graph::dominators::Dominators;
 use crate::simplify::SimplifyCfg;
 use rustc_mir_dataflow::impls::borrowed_locals;
 use rustc_mir_dataflow::Analysis;
-
+use rustc_data_structures::fx::FxHashSet;
 use crate::{MirPass, PassPolicy};
 
 pub(crate) struct AdcePass;
@@ -42,6 +42,7 @@ fn branch_is_dead(
     body: &Body<'_>,
     branch_block: BasicBlock,
     post_doms: &Dominators<BasicBlock>,
+    dead_set: &FxHashSet<Location>,
 ) -> bool {
     let successors: Vec<_> = body.basic_blocks[branch_block]
         .terminator()
@@ -51,34 +52,44 @@ fn branch_is_dead(
     if successors.len() <= 1 {
         return false;
     }
-
     if !post_doms.is_reachable(branch_block) {
         return false;
     }
 
     for successor in successors {
-        let Some(dependent) = find_control_dependent_blocks(branch_block, successor, post_doms) else {
+        let Some(dependent) = find_control_dependent_blocks(branch_block, successor, post_doms)
+        else {
             return false;
         };
-
         for bb in dependent {
             let data = &body.basic_blocks[bb];
-            let effectively_empty = data.statements.iter().all(|s| matches!(
-                s.kind,
-                StatementKind::Nop
-                    | StatementKind::StorageLive(_)
-                    | StatementKind::StorageDead(_)
-            ));
-
-            if !effectively_empty {
-                return false;
-            }
             if !matches!(data.terminator().kind, TerminatorKind::Goto { .. }) {
                 return false;
             }
+            for statement_index in 0..data.statements.len() {
+                let stmt = &data.statements[statement_index];
+
+                let ok = match &stmt.kind {
+                    StatementKind::Nop
+                    | StatementKind::StorageLive(_)
+                    | StatementKind::StorageDead(_) => true,
+
+                    StatementKind::Assign(_) => {
+                        dead_set.contains(&Location {
+                            block: bb,
+                            statement_index,
+                        })
+                    }
+
+                    _ => false,
+                };
+
+                if !ok {
+                    return false;
+                }
+            }
         }
     }
-
     true
 }
 
@@ -88,32 +99,11 @@ impl<'tcx> MirPass<'tcx> for AdcePass {
     }
 
     fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
-        //Phase 1: control-dependence-based dead branch collapse.
-        let post_dom = crate::post_dom::PostDomGraph::new(body);
-        let doms = rustc_data_structures::graph::dominators::dominators(&post_dom);
-
-        for bb in body.basic_blocks.indices() {
-            let successors: Vec<_> = body.basic_blocks[bb].terminator().successors().collect();
-            if successors.len() > 1 && branch_is_dead(body, bb, &doms) {
-                let merge = doms
-                    .immediate_dominator(bb)
-                    .expect("dead branch must have a post-dominator");
-                if body.basic_blocks[bb].is_cleanup != body.basic_blocks[merge].is_cleanup {
-                    continue;
-                }
-                body.basic_blocks_mut()[bb].terminator_mut().kind =
-                    TerminatorKind::Goto { target: merge };
-            }
-        }
-
-        SimplifyCfg::Final.run_pass(tcx, body);
-
-        // Phase 2: value-liveness-based dead statement removal.
         let borrowed_locals = borrowed_locals(body);
         let debuginfo_locals = debuginfo_locals(body);
-
-        let analysis =
-            MaybeTransitiveLiveLocals::new(&borrowed_locals, &debuginfo_locals);
+  
+        // phase 2
+        let analysis = MaybeTransitiveLiveLocals::new(&borrowed_locals, &debuginfo_locals);
 
         let mut live = analysis
             .iterate_to_fixpoint(tcx, body, None)
@@ -132,7 +122,6 @@ impl<'tcx> MirPass<'tcx> for AdcePass {
                     continue;
                 };
 
-                // Keep ADCE Phase 2 intentionally narrower than DSE.
                 if borrowed_locals.contains(local) || debuginfo_locals.contains(local) {
                     continue;
                 }
@@ -146,7 +135,6 @@ impl<'tcx> MirPass<'tcx> for AdcePass {
                     statement_index,
                 };
 
-                // This is the important part copied from real DSE.
                 live.seek_before_primary_effect(loc);
 
                 if !live.get().contains(local) {
@@ -155,12 +143,37 @@ impl<'tcx> MirPass<'tcx> for AdcePass {
             }
         }
 
-        // Cursor no longer borrows body.
+        let dead_set: FxHashSet<Location> = dead_locations.iter().copied().collect();
+        
+        // phase 1
+        let post_dom = crate::post_dom::PostDomGraph::new(body);
+        let doms = rustc_data_structures::graph::dominators::dominators(&post_dom);
+
+        // this collapses branches whose control dependent blocks contain only  statements already proven dead by the liveness analysis.
+        for bb in body.basic_blocks.indices() {
+            let successors: Vec<_> = body.basic_blocks[bb].terminator().successors().collect();
+
+            if successors.len() > 1 && branch_is_dead(body, bb, &doms, &dead_set) {
+                let Some(merge) = doms.immediate_dominator(bb) else {
+                    continue;
+                };
+
+                if body.basic_blocks[bb].is_cleanup != body.basic_blocks[merge].is_cleanup {
+                    continue;
+                }
+
+                body.basic_blocks_mut()[bb].terminator_mut().kind =
+                    TerminatorKind::Goto { target: merge };
+            }
+        }
+
         for loc in dead_locations {
             body.basic_blocks_mut()[loc.block]
                 .statements[loc.statement_index]
                 .make_nop(true);
         }
+
+        SimplifyCfg::Final.run_pass(tcx, body);
     }
 }
 

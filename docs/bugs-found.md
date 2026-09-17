@@ -30,7 +30,8 @@ A transformation that appears structurally dead can still change observable clea
 
 The control-flow phase is conservative around cleanup blocks and requires compatible cleanup status before collapsing a branch.
 
-Regression tests cover branches involving unwind behavior and drops.
+Regression tests include `evaluation/corpus/adce_dead_branch_unwind.rs`
+and `evaluation/corpus/adce_drop_unwind.rs`.
 
 ## 3. Self-Targeting and Cyclic CFGs
 
@@ -42,7 +43,11 @@ MIR can contain unusual CFG structures such as:
 
 These structures are useful for testing both the post-dominator implementation and the liveness phase.
 
-The implementation was tested against self-targeting branches without producing an ICE.
+The implementation was tested against self-targeting and cyclic CFGs without
+producing an ICE. Regression tests include
+`evaluation/corpus/adce_switch_to_self.rs`,
+`evaluation/corpus/adce_target_self.rs`, and
+`evaluation/corpus/adce_transitive_cycle.rs`.
 
 ### Lesson
 
@@ -53,6 +58,7 @@ CFG algorithms must not assume that every successor moves toward a distinct bloc
 A local can appear dead from a simple value-liveness perspective while still being involved in borrowing semantics.
 
 The value-deadness phase therefore excludes locals identified by `borrowed_locals`.
+This is regression-tested by `evaluation/corpus/adce_borrowed_local.rs`.
 
 ### Lesson
 
@@ -64,7 +70,8 @@ Removing an assignment to a local can affect the information available to debugi
 
 The implementation therefore excludes locals identified as required for debuginfo from Phase 2 elimination.
 
-A dedicated regression test covers this behavior.
+This behavior is regression-tested by
+`evaluation/corpus/adce_debuginfo_local.rs`.
 
 ## 6. Conservative Side-Effect Handling
 
@@ -77,6 +84,10 @@ For example, a call may have externally observable side effects, and a `Drop` te
 ADCE must distinguish between an unused value and an unobservable operation.
 
 The current implementation therefore limits Phase 2 to simple `Rvalue::Use` assignments and leaves calls, drops, and other potentially effectful operations untouched.
+
+The corresponding safety cases include
+`evaluation/corpus/adce_call_side_effect.rs` and
+`evaluation/corpus/adce_drop_safety.rs`.
 
 ## 7. Testing Strategy
 
